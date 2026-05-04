@@ -1,7 +1,17 @@
+# Local Data
+data/
+sewerML/
+
+# Virtual Environments
+.hacksew/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
+
+# macOS
+.DS_Store
 
 # C extensions
 *.so
