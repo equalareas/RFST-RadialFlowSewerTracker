@@ -441,7 +441,7 @@ class MovementPathEstimator:
                        movement_path, turning_point, total_time,
                        sewer_start, sewer_end):
         gt_path = f'distance_labels/{video_number}.npy'
-        has_gt = os.path.exists(gt_path)
+        has_gt = os.path.exists(gt_path) and not getattr(self, "suppress_ground_truth_summary", False)
 
         print(f"\n  {'=' * 50}")
         print(f"  RESULTS — Video {video_number}")
