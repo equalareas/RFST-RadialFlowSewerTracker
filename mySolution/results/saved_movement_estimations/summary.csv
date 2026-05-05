@@ -1,0 +1,12 @@
+video,num_frames,turning_point,max_position,end_position,output_path
+1,4206,2858.0,97.42827119450871,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_1_movement_estimation.npz
+2,3014,1441.0,92.03931364457671,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_2_movement_estimation.npz
+3,1603,746.0,39.43401125237915,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_3_movement_estimation.npz
+4,1531,863.0,39.59289731394689,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_4_movement_estimation.npz
+5,2466,1706.0,38.03734223033608,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_5_movement_estimation.npz
+6,4968,2459.0,80.11444323823346,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_6_movement_estimation.npz
+7,2498,1304.0,62.52512117521943,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_7_movement_estimation.npz
+8,1501,732.0,60.00661513447572,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_8_movement_estimation.npz
+9,1619,716.0,59.5541052676518,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_9_movement_estimation.npz
+10,2293,1372.0,80.17962147262668,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_10_movement_estimation.npz
+11,1297,581.0,39.22543914444468,0.0,/Users/kepler/hacksew/mySolution/results/saved_movement_estimations/video_11_movement_estimation.npz

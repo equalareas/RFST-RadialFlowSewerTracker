@@ -1,0 +1,101 @@
+[
+  {
+    "video": 1,
+    "num_sampled_frames": 421,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 7,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_1_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_1_intervals.csv"
+  },
+  {
+    "video": 2,
+    "num_sampled_frames": 302,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 3,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_2_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_2_intervals.csv"
+  },
+  {
+    "video": 3,
+    "num_sampled_frames": 161,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 4,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_3_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_3_intervals.csv"
+  },
+  {
+    "video": 4,
+    "num_sampled_frames": 154,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 4,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_4_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_4_intervals.csv"
+  },
+  {
+    "video": 5,
+    "num_sampled_frames": 247,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 7,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_5_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_5_intervals.csv"
+  },
+  {
+    "video": 6,
+    "num_sampled_frames": 497,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 4,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_6_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_6_intervals.csv"
+  },
+  {
+    "video": 7,
+    "num_sampled_frames": 250,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 3,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_7_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_7_intervals.csv"
+  },
+  {
+    "video": 8,
+    "num_sampled_frames": 151,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 3,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_8_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_8_intervals.csv"
+  },
+  {
+    "video": 9,
+    "num_sampled_frames": 162,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 3,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_9_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_9_intervals.csv"
+  },
+  {
+    "video": 10,
+    "num_sampled_frames": 230,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 3,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_10_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_10_intervals.csv"
+  },
+  {
+    "video": 11,
+    "num_sampled_frames": 130,
+    "sample_step": 10,
+    "smooth_window": 21,
+    "num_intervals": 4,
+    "score_path": "mySolution/results/heuristic_main_detector/scores/video_11_scores.csv",
+    "interval_path": "mySolution/results/heuristic_main_detector/intervals/video_11_intervals.csv"
+  }
+]

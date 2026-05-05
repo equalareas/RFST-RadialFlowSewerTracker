@@ -1,0 +1,5 @@
+video,start_frame,end_frame,label,mean_score,max_score
+3,0,69,pre_inspection_handling,0.49269409690584454,0.565243661403656
+3,70,1530,inspection_active,0.9332839270838263,0.9843074083328247
+3,1531,1600,post_inspection_handling,0.5064583591052464,0.5783630609512329
+3,1560,1600,anomaly_check,1.0,1.0
