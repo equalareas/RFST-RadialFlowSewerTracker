@@ -70,7 +70,7 @@ During the hackathon, we tested the following approaches and discarded them due 
 ---
 
 ## Obstruction detection (Bonus Work)
-We implemented a heuristic approach for obstruction detection and general image classification; results were mappped to individual frames to generate compact infographics (see example below). Additionally, we wrote a script to match video frames to said graphs (see beginning of the README).
+We implemented a heuristic approach for obstruction detection and general image classification; results were mapped to individual frames to generate compact infographics (see example below). Additionally, we wrote a script to match video frames to said graphs (see beginning of the README).
 
 * **Odometry Performance:** Compares **Estimated Position** (blue) vs. **Measured Position** (grey), achieving a **6.40m MAE** in this sample [cite: 1].
 * **Turning Point:** Successfully detected the reversal point with an error of only **11 frames**.
