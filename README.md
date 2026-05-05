@@ -2,7 +2,7 @@
 
 We (**Carlong Geis, Frederik Kepler, Julius Schneider**) developed RFST during the Helbling x PhysicalAI Hackathon
 
-![Alt Text](mySolution/results/presentation.gif)
+![RFST Git Presentation](mySolution/results/presentation.gif)
 
 The "Bomb" travels into the channel, and is pulled back at a certain point, and returns. The solution is evaluated based on the **Mean Absolute Error (MAE)** of the estimated position and the **Frame Error** of the Turning Point (TP). i.e. How many frames off from the real TP the estimated TP was.
 
@@ -69,19 +69,35 @@ During the hackathon, we tested the following approaches and discarded them due 
 
 ---
 
+## Obstruction detection (Bonus Work)
+We implemented a Heuristic approach for obstruction detection and general image classification
+
+* **Odometry Performance:** Compares **Estimated Position** (blue) vs. **Measured Position** (grey), achieving a **6.40m MAE** in this sample [cite: 1].
+* **Turning Point:** Successfully detected the reversal point with an error of only **11 frames**.
+* **ML Quality Bar:** The bottom track displays our ML model's visibility classification:
+    * **Green:** Good visibility.
+    * **Orange:** Reduced visibility.
+    * **Red:** Poor/no visibility.
+
+
+![Machine learning approach](mySolution/results/movement_inspection_overlays/video_2_movement_inspection_overlay.png
+)
+
+---
+
 ## Performance Metrics
 
-| Video | MAE [m] | TP-Error [Frames] | Note |
-| :---: | :---: | :---: | :--- |
-| **1** | 6.83 | 23 | - |
-| **2** | 6.46 | 12 | - |
-| **3** | 3.47 | 36 | - |
-| **4** | **1.62** | 6 | Best Result |
-| **8** | 7.59 | 14 | - |
-| **9** | 6.64 | 5 | - |
-| **10** | 10.20 | 8 | - |
-| **11** | 2.75 | **4** | - |
-| **Avg** | **5.7f0** | **13.5** | - |
+| Video | MAE [m] | TP-Error [Frames] |
+| :---: | :---: | :---: |
+| **1** | 6.83 | 23 |
+| **2** | 6.46 | 12 |
+| **3** | 3.47 | 36 |
+| **4** | **1.62** | 6 |
+| **8** | 7.59 | 14 |
+| **9** | 6.64 | 5 |
+| **10** | 10.20 | 8 |
+| **11** | 2.75 | **4** |
+| **Avg** | **5.70** | **13.5** |
 
 ---
 
@@ -97,9 +113,5 @@ During the hackathon, we tested the following approaches and discarded them due 
 
 ---
 
-## Known Limitations & Future Work
+## Known Limitations
 * **Ramp-up Lag:** Farnebäck underestimates displacements in strong acceleration phases (see Video 1, 2, 8, 10). The first 20-30% of the route is systematically slightly underestimated.
-* **Future Approaches:**
-    * Dual-Pass Flow (combination of small and large `winsize`).
-    * Power-Law correction of the flow.
-    * Adaptive process noise in the Kalman filter (increased in strong acceleration phases).
