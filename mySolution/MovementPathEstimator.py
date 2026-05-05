@@ -6,19 +6,12 @@ import time
 
 class MovementPathEstimator:
     """
-    Farnebäck Optical Flow based movement path estimator v8.
-
-    Changes from v7:
-    [E] Kalman RTS smoother replaces Savitzky-Golay + velocity regularization
-        — adaptive measurement noise based on flow magnitude
-        — coasts through noisy/stopped periods instead of oscillating
-    [F] Triangle-fit turning point instead of argmax
-        — fits ascending+descending lines, finds optimal breakpoint
-        — robust to noise because it uses global shape
-    [G] Separate ascending/descending scale factors
-        — robot often moves at different speeds out vs back
-    [H] Finer GT calibration (50 bins instead of 20)
-        — also calibrates both ascending AND descending segments
+    RFST (RadialFlowSewerTracker) estimates the distance travelled by a sewer inspection
+    robot for every frame of a video. It computes Farnebäck optical flow between
+    consecutive frames, projects it onto the radial direction from the focus of
+    expansion, smooths the result with a Kalman/RTS smoother, and integrates it
+    into a distance-along-pipe curve scaled to the known channel length. It also
+    detects the turning point where the robot reverses direction.
     """
 
     def __init__(self, video_num_to_test, test_all_videos):
@@ -43,11 +36,9 @@ class MovementPathEstimator:
                     )
         print(f"Loaded ground truth for videos: {sorted(self.gt_labels.keys())}")
 
-    # ================================================================== #
-    #  MAIN METHOD                                                        #
-    # ================================================================== #
 
     def calculate_movement_path_and_turning_point(self, video_number, channel_length):
+        """ The pipleine and our main method are also described in Git, it is carefully documented step by step in the code with comments. """
         t0 = time.time()
         path_to_video = self.path_to_videos + str(video_number)
 
@@ -208,31 +199,14 @@ class MovementPathEstimator:
 
         return movement_path, turning_point, movement_direction
 
-    # ================================================================== #
-    #  [E] KALMAN RTS SMOOTHER                                             #
-    # ================================================================== #
 
     def _kalman_smooth(self, radial_flows):
-        """
-        Constant-velocity Kalman filter + RTS backward smoother.
-
-        Why this is better than Savitzky-Golay + velocity regularization:
-        - Adaptive: when flow magnitude is low (robot stopped, or water
-          dominating), measurement noise R goes up → filter trusts the
-          motion model (coast) instead of the noisy measurement
-        - When flow is strong and consistent, R is low → filter tracks
-          the measurement closely
-        - RTS backward pass makes it non-causal (uses future info) like
-          Savitzky-Golay but with proper uncertainty propagation
-        """
         n = len(radial_flows)
         if n == 0:
             return radial_flows
 
-        # Tunable parameters
-        Q = 0.0005   # Process noise — how much velocity can change per frame
-                      # Low = smoother, high = more responsive
-        R_base = 0.1  # Base measurement noise
+        Q = 0.0005          
+        R_base = 0.1  
 
         # Forward Kalman pass
         x_fwd = np.zeros(n)      # filtered state (velocity estimate)
@@ -275,37 +249,12 @@ class MovementPathEstimator:
 
         return smoothed
 
-    # ================================================================== #
-    #  [F] TURNING POINT DETECTION                                         #
-    # ================================================================== #
-
     def _find_turning_point(self, position, sewer_start, sewer_end):
-        """
-        Simple argmax — the most reliable method for these curves.
-        
-        Tried and rejected:
-        - Triangle fit: assumes V-shape, fails on plateau curves (97 frames error)
-        - Velocity zero-crossing: water flow prevents clean sign change
-        - Magnitude-threshold mean: was decent but argmax is simpler
-          and gave 39 frames on v7
-        """
         return float(np.argmax(position))
 
-    # ================================================================== #
-    #  [G] SEPARATE ASCENDING / DESCENDING SCALE                           #
-    # ================================================================== #
 
     def _scale_with_separate_alpha(self, raw_position, tp_idx, channel_length):
-        """
-        Scale ascending and descending segments independently.
-
-        The robot often moves at different speeds going out vs coming
-        back (cable drag, operator behaviour). Using a single global
-        alpha forces one segment to be correct and distorts the other.
-
-        Each segment is scaled so its peak-to-endpoint distance equals
-        channel_length, then stitched at the turning point.
-        """
+        
         n = len(raw_position)
         tp_idx = max(1, min(tp_idx, n - 2))
 
@@ -354,9 +303,6 @@ class MovementPathEstimator:
         movement_path = np.clip(movement_path, 0.0, channel_length)
         return movement_path
 
-    # ================================================================== #
-    #  FOE DETECTION (unchanged from v7)                                   #
-    # ================================================================== #
 
     def _estimate_foe(self, flow_samples):
         h, w = flow_samples[0].shape[:2]
@@ -406,9 +352,6 @@ class MovementPathEstimator:
         foe_y = np.median(cy_estimates)
         return float(foe_x), float(foe_y)
 
-    # ================================================================== #
-    #  RADIAL FLOW (unchanged from v7)                                     #
-    # ================================================================== #
 
     def _compute_radial_flow(self, flow):
         flow_u = flow[:, :, 0]
@@ -433,15 +376,12 @@ class MovementPathEstimator:
         weighted_mean = np.average(inlier_radial, weights=inlier_weights)
         return float(weighted_mean)
 
-    # ================================================================== #
-    #  SUMMARY PRINT                                                       #
-    # ================================================================== #
 
     def _print_summary(self, video_number, num_frames, channel_length,
                        movement_path, turning_point, total_time,
                        sewer_start, sewer_end):
         gt_path = f'distance_labels/{video_number}.npy'
-        has_gt = os.path.exists(gt_path) and not getattr(self, "suppress_ground_truth_summary", False)
+        has_gt = os.path.exists(gt_path)
 
         print(f"\n  {'=' * 50}")
         print(f"  RESULTS — Video {video_number}")
@@ -476,9 +416,6 @@ class MovementPathEstimator:
 
         print(f"  {'=' * 50}\n")
 
-    # ================================================================== #
-    #  FRAME LOADING                                                       #
-    # ================================================================== #
 
     def _load_gray(self, path):
         img = cv2.imread(path)
@@ -492,10 +429,6 @@ class MovementPathEstimator:
             gray = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
         return gray
-
-    # ================================================================== #
-    #  SPIKE REMOVAL (unchanged)                                           #
-    # ================================================================== #
 
     def _remove_entry_exit_spikes(self, radial_flows, start, end):
         n = end - start
@@ -532,10 +465,6 @@ class MovementPathEstimator:
 
         return radial_flows
 
-    # ================================================================== #
-    #  ENDPOINT ANCHORING (unchanged)                                      #
-    # ================================================================== #
-
     def _anchor_endpoints_v2(self, raw_position):
         n = len(raw_position)
         tp = np.argmax(raw_position)
@@ -554,10 +483,6 @@ class MovementPathEstimator:
                 corrected[tp:] -= correction
 
         return corrected
-
-    # ================================================================== #
-    #  SEWER DETECTION (unchanged)                                         #
-    # ================================================================== #
 
     def _compute_ring_brightness(self, gray_frame):
         if np.sum(self._combined_mask) < 100:
@@ -640,9 +565,6 @@ class MovementPathEstimator:
 
         return start, end
 
-    # ================================================================== #
-    #  GEOMETRIC MASK (unchanged)                                          #
-    # ================================================================== #
 
     def _compute_geometric_mask(self, path):
         img = cv2.imread(path)
@@ -699,9 +621,6 @@ class MovementPathEstimator:
         self._combined_mask = ring & self.valid_mask
         print(f"  Combined mask: {np.sum(self._combined_mask)} pixels")
 
-    # ================================================================== #
-    #  FRAMEWORK BOILERPLATE                                               #
-    # ================================================================== #
 
     def execute_estimations(self):
         if self.test_all_videos:
