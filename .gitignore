@@ -10,6 +10,7 @@ frame_images.zip
 # Local Data
 data/
 sewerML/
+*_trash*
 
 # Virtual Environments
 .hacksew/
