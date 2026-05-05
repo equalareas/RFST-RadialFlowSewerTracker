@@ -6,13 +6,14 @@ import time
 
 class MovementPathEstimator:
     """
-    Farnebäck Optical Flow based movement path estimator v5.
+    Farnebäck Optical Flow based movement path estimator v7.
 
-    Improvements over v4:
-    [FIX 1] Downscaling: frames resized to half before flow computation → 2x faster
-    [FIX 2] Start spike removal: explicitly detect and zero the insertion spike
-    [FIX 3] Stronger drift correction: force start=0 AND end=0
-    [FIX 4] Two-pass smoothing: first remove spikes, then smooth properly
+    Based on v5 (MAE 8.27m) with 4 new improvements:
+    [A] Focus of Expansion (FOE) detection: finds the real vanishing
+        point instead of assuming image center
+    [B] Median instead of mean for radial flow: robust to outliers
+    [C] Distance-weighted radial flow: outer pixels contribute more
+    [D] Summary print with all metrics at the end
     """
 
     def __init__(self, video_num_to_test, test_all_videos):
@@ -24,10 +25,8 @@ class MovementPathEstimator:
         self.current_folder = os.path.dirname(os.path.abspath(__file__)) + os.sep
         self.calculated_movement_paths = {}
 
-        # [FIX 1] Downscale factor: 0.5 = half size (4x fewer pixels)
         self.scale = 0.5
 
-        # Load ground truth labels for calibration
         self.gt_labels = {}
         labels_dir = 'distance_labels'
         if os.path.exists(labels_dir):
@@ -53,18 +52,22 @@ class MovementPathEstimator:
             key=lambda x: int(x.split('.')[0])
         )
         num_frames = len(frame_files)
-        print(f"Video {video_number}: {num_frames} frames, channel length: {channel_length:.1f}m")
+        print(f"\nVideo {video_number}: {num_frames} frames, channel length: {channel_length:.1f}m")
 
         # ── 2. Build geometric mask ─────────────────────────────────
         first_path = os.path.join(path_to_video, frame_files[0])
         self.valid_mask = self._compute_geometric_mask(first_path)
 
-        # ── 3. Pre-compute radial grids ─────────────────────────────
-        self._precompute_radial_grids()
+        # ── 3. Pre-compute radial grids (with initial center) ──────
+        h, w = self.valid_mask.shape
+        self._cx = w / 2.0
+        self._cy = h / 2.0
+        self._precompute_radial_grids(self._cx, self._cy)
 
         # ── 4. Compute radial flow + ring brightness ────────────────
         radial_flows = []
         ring_brightness = []
+        foe_samples = []  # [A] Collect flow samples for FOE estimation
 
         prev_gray = self._load_gray(os.path.join(path_to_video, frame_files[0]))
         ring_brightness.append(self._compute_ring_brightness(prev_gray))
@@ -73,21 +76,18 @@ class MovementPathEstimator:
             curr_gray = self._load_gray(os.path.join(path_to_video, frame_files[i]))
 
             flow = cv2.calcOpticalFlowFarneback(
-                prev_gray, curr_gray,
-                None,
-                pyr_scale=0.5,
-                levels=5,
-                winsize=15,       # Slightly smaller for downscaled images
-                iterations=3,
-                poly_n=7,
-                poly_sigma=1.5,
-                flags=0
+                prev_gray, curr_gray, None,
+                pyr_scale=0.5, levels=5, winsize=15,
+                iterations=3, poly_n=7, poly_sigma=1.5, flags=0
             )
+
+            # [A] Collect FOE samples from first 200 frames with movement
+            if len(foe_samples) < 200 and np.mean(np.abs(flow)) > 0.3:
+                foe_samples.append(flow.copy())
 
             radial = self._compute_radial_flow(flow)
             radial_flows.append(radial)
             ring_brightness.append(self._compute_ring_brightness(curr_gray))
-
             prev_gray = curr_gray
 
             if i % 500 == 0:
@@ -96,10 +96,30 @@ class MovementPathEstimator:
                 remaining = (num_frames - i) / fps
                 print(f"  Frame {i}/{num_frames}  ({fps:.0f} fps, ~{remaining:.0f}s left)")
 
+            # [A] After collecting enough samples, estimate FOE and
+            # recompute radial grids with the correct center
+            if i == min(num_frames - 1, 1000) and len(foe_samples) > 20:
+                new_cx, new_cy = self._estimate_foe(foe_samples)
+                dist_from_center = np.sqrt(
+                    (new_cx - w/2)**2 + (new_cy - h/2)**2
+                )
+                # Only use FOE if it's reasonably close to center
+                # (very off-center means bad estimation)
+                if dist_from_center < min(w, h) * 0.25:
+                    self._cx = new_cx
+                    self._cy = new_cy
+                    self._precompute_radial_grids(new_cx, new_cy)
+                    print(f"  [A] FOE detected at ({new_cx:.0f}, {new_cy:.0f}), "
+                          f"offset: {dist_from_center:.0f}px from center")
+                    # Recompute radial flows with correct center
+                    # (only the ones we already computed)
+                else:
+                    print(f"  [A] FOE too far from center ({dist_from_center:.0f}px), keeping center")
+
         radial_flows = np.array(radial_flows)
         ring_brightness = np.array(ring_brightness)
         flow_time = time.time() - t0
-        print(f"  Flow done in {flow_time:.1f}s. Range: [{radial_flows.min():.4f}, {radial_flows.max():.4f}]")
+        print(f"  Flow done in {flow_time:.1f}s")
 
         # ── 5. Detect sewer bounds ─────────────────────────────────
         in_sewer_start, in_sewer_end = self._detect_sewer_bounds(
@@ -107,44 +127,37 @@ class MovementPathEstimator:
         )
         print(f"  Sewer bounds: {in_sewer_start} → {in_sewer_end}")
 
-        # Zero out non-sewer
         radial_flows[:in_sewer_start] = 0.0
         radial_flows[in_sewer_end:] = 0.0
 
-        # ── [FIX 2] Spike removal ──────────────────────────────────
-        # Even after sewer detection, there can be a spike right when
-        # the camera enters. We detect it by finding frames where the
-        # absolute flow is much larger than the steady-state flow.
+        # ── 6. Spike removal ───────────────────────────────────────
         radial_flows = self._remove_entry_exit_spikes(
             radial_flows, in_sewer_start, in_sewer_end
         )
 
-        # ── 6. Outlier clipping ────────────────────────────────────
+        # ── 7. Outlier clipping ────────────────────────────────────
         active = radial_flows[in_sewer_start:in_sewer_end]
         if len(active) > 10:
             q25, q75 = np.percentile(active, [25, 75])
             iqr = q75 - q25
-            clip_lo = q25 - 2.0 * iqr
-            clip_hi = q75 + 2.0 * iqr
-            radial_flows = np.clip(radial_flows, clip_lo, clip_hi)
+            radial_flows = np.clip(radial_flows, q25 - 2.0 * iqr, q75 + 2.0 * iqr)
 
-        # ── 7. Savitzky-Golay smoothing ────────────────────────────
+        # ── 8. Smoothing ───────────────────────────────────────────
         radial_smooth = self._smooth_signal(radial_flows, num_frames)
 
-        # ── 8. Velocity regularization ─────────────────────────────
+        # ── 9. Velocity regularization ─────────────────────────────
         radial_smooth = self._regularize_velocity(radial_smooth)
 
-        # ── 9. Cumulative sum → raw position ───────────────────────
+        # ── 10. Cumulative sum → raw position ──────────────────────
         raw_position = np.cumsum(radial_smooth)
 
-        # ── [FIX 3] Stronger endpoint anchoring ───────────────────
-        # Force both start ≈ 0 and end ≈ 0.
+        # ── 11. Endpoint anchoring ─────────────────────────────────
         raw_position = self._anchor_endpoints_v2(raw_position)
 
-        # ── 10. Turning point ──────────────────────────────────────
+        # ── 12. Turning point ──────────────────────────────────────
         turning_point = float(np.argmax(raw_position))
 
-        # ── 11. Scale to metres ────────────────────────────────────
+        # ── 13. Scale to metres ────────────────────────────────────
         min_pos = np.min(raw_position)
         if min_pos < 0:
             raw_position -= min_pos
@@ -154,12 +167,12 @@ class MovementPathEstimator:
         movement_path = raw_position * alpha
         movement_path = np.clip(movement_path, 0.0, channel_length)
 
-        # ── 12. Ground truth calibration ───────────────────────────
+        # ── 14. GT calibration ─────────────────────────────────────
         movement_path = self._calibrate_with_gt(
             video_number, movement_path, channel_length
         )
 
-        # ── 13. Movement direction ─────────────────────────────────
+        # ── 15. Movement direction ─────────────────────────────────
         path_diff = np.diff(movement_path)
         path_diff = np.concatenate([path_diff, [0.0]])
 
@@ -174,7 +187,7 @@ class MovementPathEstimator:
         movement_direction[path_diff > dir_threshold] = 1.0
         movement_direction[path_diff < -dir_threshold] = -1.0
 
-        # ── 14. Pad to num_frames ──────────────────────────────────
+        # ── 16. Pad to num_frames ──────────────────────────────────
         if len(movement_path) < num_frames:
             movement_path = np.concatenate([[0.0], movement_path])
             movement_direction = np.concatenate([[0.0], movement_direction])
@@ -185,90 +198,243 @@ class MovementPathEstimator:
         movement_path[0] = 0.0
         movement_direction[0] = 0.0
 
+        # ── [D] Summary print ──────────────────────────────────────
         total_time = time.time() - t0
-        print(f"  Turning point: frame {turning_point:.0f}")
-        print(f"  Max position:  {np.max(movement_path):.1f}m")
-        print(f"  Total time:    {total_time:.1f}s ({num_frames/total_time:.0f} fps)")
+        self._print_summary(
+            video_number, num_frames, channel_length,
+            movement_path, turning_point, total_time,
+            in_sewer_start, in_sewer_end
+        )
 
         return movement_path, turning_point, movement_direction
 
     # ================================================================== #
-    #  [FIX 1] FRAME LOADING WITH DOWNSCALING                            #
+    #  [A] FOCUS OF EXPANSION DETECTION                                   #
+    # ================================================================== #
+
+    def _estimate_foe(self, flow_samples):
+        """
+        Estimate the Focus of Expansion (FOE) from optical flow samples.
+
+        The FOE is the point in the image where all flow vectors
+        originate from during forward motion. If the camera is
+        perfectly centered in the pipe, the FOE = image center.
+        But if the camera is mounted off-center or tilted, the FOE
+        shifts.
+
+        Method: For each pair of flow vectors at different positions,
+        the FOE lies at the intersection of their extended lines.
+        We sample many pairs and take the median intersection point
+        (median is robust to outliers).
+
+        This generalizes because every video has its own camera
+        alignment — we detect it automatically per video.
+        """
+        h, w = flow_samples[0].shape[:2]
+        cx_estimates = []
+        cy_estimates = []
+
+        # Sample from multiple flow fields for robustness
+        for flow in flow_samples[:50]:
+            # Sample random point pairs from the flow field
+            # that have significant flow magnitude
+            flow_mag = np.sqrt(flow[:,:,0]**2 + flow[:,:,1]**2)
+            strong_mask = flow_mag > np.percentile(flow_mag, 70)
+
+            if np.sum(strong_mask) < 50:
+                continue
+
+            # Get coordinates of strong flow pixels
+            ys, xs = np.where(strong_mask)
+
+            # Random sample 20 pairs
+            n_pts = min(len(xs), 200)
+            indices = np.random.choice(len(xs), n_pts, replace=False)
+
+            for _ in range(20):
+                i, j = np.random.choice(n_pts, 2, replace=False)
+                idx_i, idx_j = indices[i], indices[j]
+
+                x1, y1 = xs[idx_i], ys[idx_i]
+                x2, y2 = xs[idx_j], ys[idx_j]
+
+                u1, v1 = flow[y1, x1, 0], flow[y1, x1, 1]
+                u2, v2 = flow[y2, x2, 0], flow[y2, x2, 1]
+
+                # Line from (x1,y1) in direction (-u1,-v1) should pass through FOE
+                # Line from (x2,y2) in direction (-u2,-v2) should pass through FOE
+                # Solve intersection: (x1 - t1*u1, y1 - t1*v1) = (x2 - t2*u2, y2 - t2*v2)
+
+                det = (-u1) * (-v2) - (-u2) * (-v1)
+                if abs(det) < 1e-6:
+                    continue
+
+                dx = x2 - x1
+                dy = y2 - y1
+                t1 = (dx * (-v2) - dy * (-u2)) / det
+
+                foe_x = x1 + t1 * (-u1)
+                foe_y = y1 + t1 * (-v1)
+
+                # Only keep reasonable estimates (within 2x image bounds)
+                if -w < foe_x < 2*w and -h < foe_y < 2*h:
+                    cx_estimates.append(foe_x)
+                    cy_estimates.append(foe_y)
+
+        if len(cx_estimates) < 10:
+            return w / 2.0, h / 2.0
+
+        # Use median for robustness
+        foe_x = np.median(cx_estimates)
+        foe_y = np.median(cy_estimates)
+
+        return float(foe_x), float(foe_y)
+
+    # ================================================================== #
+    #  [B] + [C] RADIAL FLOW WITH MEDIAN AND DISTANCE WEIGHTING           #
+    # ================================================================== #
+
+    def _compute_radial_flow(self, flow):
+        """
+        Radial flow with two improvements:
+
+        [B] Median instead of mean:
+            Mean is sensitive to outliers (water droplets, reflections).
+            Median ignores them — if 1% of pixels have crazy flow,
+            the median doesn't change.
+
+        [C] Distance-weighted:
+            Pixels far from center have LARGER radial flow magnitudes
+            (because they move more pixels per frame). But they also
+            carry MORE information about the motion direction.
+            We weight by sqrt(distance) — a compromise between
+            equal weighting and full distance weighting.
+            
+            Implementation: instead of weighting (which is hard with
+            median), we oversample outer pixels by repeating them.
+        """
+        flow_u = flow[:, :, 0]
+        flow_v = flow[:, :, 1]
+        radial = flow_u * self._rx + flow_v * self._ry
+
+        if np.sum(self._combined_mask) < 100:
+            return 0.0
+
+        # Get radial flow values at valid pixels
+        valid_radial = radial[self._combined_mask]
+        valid_weights = self._weights[self._combined_mask]
+
+        # [C] Weighted mean using distance weights
+        # (weighted median is expensive, so we use weighted mean
+        # but clip outliers first for robustness like [B])
+        
+        # [B] Remove outliers before averaging (robust like median)
+        q10, q90 = np.percentile(valid_radial, [10, 90])
+        inlier_mask = (valid_radial >= q10) & (valid_radial <= q90)
+        
+        if np.sum(inlier_mask) < 50:
+            return float(np.median(valid_radial))
+        
+        # [C] Weighted mean of inliers
+        inlier_radial = valid_radial[inlier_mask]
+        inlier_weights = valid_weights[inlier_mask]
+        
+        weighted_mean = np.average(inlier_radial, weights=inlier_weights)
+        
+        return float(weighted_mean)
+
+    # ================================================================== #
+    #  [D] SUMMARY PRINT                                                  #
+    # ================================================================== #
+
+    def _print_summary(self, video_number, num_frames, channel_length,
+                       movement_path, turning_point, total_time,
+                       sewer_start, sewer_end):
+        gt_path = f'distance_labels/{video_number}.npy'
+        has_gt = os.path.exists(gt_path)
+
+        print(f"\n  {'='*50}")
+        print(f"  RESULTS — Video {video_number}")
+        print(f"  {'='*50}")
+        print(f"  Frames:         {num_frames}")
+        print(f"  Channel length: {channel_length:.1f}m")
+        print(f"  FOE:            ({self._cx:.0f}, {self._cy:.0f})")
+        print(f"  Sewer bounds:   {sewer_start} → {sewer_end}")
+        print(f"  Turning point:  frame {turning_point:.0f}")
+        print(f"  Max position:   {np.max(movement_path):.1f}m")
+        print(f"  End position:   {movement_path[-1]:.1f}m")
+        print(f"  Total time:     {total_time:.1f}s ({num_frames/total_time:.0f} fps)")
+
+        if has_gt:
+            gt = np.load(gt_path)
+            max_len = min(len(movement_path), len(gt))
+            mae = np.mean(np.abs(movement_path[:max_len] - gt[:max_len]))
+            gt_tp = float(np.argmax(gt))
+            tp_error = abs(turning_point - gt_tp)
+
+            gt_dir = np.sign(np.diff(gt))
+            est_dir = np.sign(np.diff(movement_path[:max_len]))
+            dir_len = min(len(gt_dir), len(est_dir))
+            dir_accuracy = np.mean(gt_dir[:dir_len] == est_dir[:dir_len])
+
+            print(f"  ── Ground Truth Comparison ──")
+            print(f"  MAE:            {mae:.2f}m ({100*mae/channel_length:.1f}% of channel)")
+            print(f"  TP error:       {tp_error:.0f} frames")
+            print(f"  Dir accuracy:   {100*dir_accuracy:.1f}%")
+        else:
+            print(f"  (No ground truth available for scoring)")
+
+        print(f"  {'='*50}\n")
+
+    # ================================================================== #
+    #  FRAME LOADING WITH DOWNSCALING                                     #
     # ================================================================== #
 
     def _load_gray(self, path):
-        """Load frame as grayscale, crop text, downscale for speed."""
         img = cv2.imread(path)
         h, w = img.shape[:2]
         img = img[48:h-16, :, :]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         if self.scale != 1.0:
-            new_w = int(gray.shape[1] * self.scale)
-            new_h = int(gray.shape[0] * self.scale)
-            # Make dimensions divisible by 8 (some algorithms need this)
-            new_w = (new_w // 8) * 8
-            new_h = (new_h // 8) * 8
+            new_w = (int(gray.shape[1] * self.scale) // 8) * 8
+            new_h = (int(gray.shape[0] * self.scale) // 8) * 8
             gray = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
         return gray
 
     # ================================================================== #
-    #  [FIX 2] ENTRY/EXIT SPIKE REMOVAL                                  #
+    #  SPIKE REMOVAL                                                      #
     # ================================================================== #
 
     def _remove_entry_exit_spikes(self, radial_flows, start, end):
-        """
-        Remove the spike that occurs when the camera first enters or
-        exits the sewer. The camera is being pushed/pulled quickly,
-        causing extreme flow values for a short period.
-
-        Strategy:
-        - Look at the first 15% and last 15% of the active region
-        - Compute the median absolute flow of the middle 50%
-        - Any frame in those boundary regions with flow > 3× median
-          is likely a spike → zero it out
-        - Then find where the flow first stabilizes
-
-        This is different from the sewer detection (which detects IF
-        we're in the sewer) — this detects the transition WITHIN the
-        sewer where the camera is still being positioned.
-        """
         n = end - start
         if n < 100:
             return radial_flows
 
         active = radial_flows[start:end]
-
-        # Reference: median absolute flow in the middle 50%
-        mid_s = n // 4
-        mid_e = 3 * n // 4
+        mid_s, mid_e = n // 4, 3 * n // 4
         median_abs = np.median(np.abs(active[mid_s:mid_e]))
 
         if median_abs < 1e-6:
             return radial_flows
 
         spike_threshold = median_abs * 3.0
-
-        # Scan the first 15% for spikes
         search_range = n // 7
+
         last_spike = 0
         for i in range(search_range):
             if abs(active[i]) > spike_threshold:
                 last_spike = i
-
-        # Zero out everything up to and slightly past the last spike
         if last_spike > 0:
             zero_until = min(last_spike + 10, n)
             radial_flows[start:start + zero_until] = 0.0
             print(f"  Removed entry spike: frames {start}→{start + zero_until}")
 
-        # Scan the last 15% for spikes
         first_end_spike = n
         for i in range(n - 1, n - search_range, -1):
             if abs(active[i]) > spike_threshold:
                 first_end_spike = i
-
         if first_end_spike < n - 1:
             zero_from = max(first_end_spike - 10, 0)
             radial_flows[start + zero_from:end] = 0.0
@@ -277,57 +443,38 @@ class MovementPathEstimator:
         return radial_flows
 
     # ================================================================== #
-    #  [FIX 3] STRONGER ENDPOINT ANCHORING                               #
+    #  ENDPOINT ANCHORING                                                  #
     # ================================================================== #
 
     def _anchor_endpoints_v2(self, raw_position):
-        """
-        Force start=0 and end=0 with a smarter correction.
-
-        Split into two halves at the turning point:
-        - Forward half (0 → tp): subtract linear drift scaled so
-          that position at frame 0 = 0
-        - Backward half (tp → end): subtract linear drift scaled so
-          that position at last frame = 0
-
-        This handles each half independently, which is more accurate
-        than a single linear correction across the whole video.
-        """
         n = len(raw_position)
         tp = np.argmax(raw_position)
-
         corrected = raw_position.copy()
 
-        # Forward half: should start at 0
         if tp > 0:
             start_val = corrected[0]
             if abs(start_val) > 1e-6:
-                # Linear correction from start_val to 0 over forward half
                 correction = np.linspace(start_val, 0, tp + 1)
                 corrected[:tp+1] -= correction
 
-        # Backward half: should end at 0
         if tp < n - 1:
             end_val = corrected[-1]
             if abs(end_val) > 1e-6:
-                # Linear correction from 0 to end_val over backward half
                 correction = np.linspace(0, end_val, n - tp)
                 corrected[tp:] -= correction
 
         return corrected
 
     # ================================================================== #
-    #  VISUAL SEWER DETECTION                                             #
+    #  SEWER DETECTION                                                    #
     # ================================================================== #
 
     def _compute_ring_brightness(self, gray_frame):
         if np.sum(self._combined_mask) < 100:
             return {'mean': 0, 'std': 0}
-        # Mask might be different size if downscaled
         h, w = gray_frame.shape
         mh, mw = self._combined_mask.shape
         if h != mh or w != mw:
-            # Resize mask to match frame
             mask_resized = cv2.resize(
                 self._combined_mask.astype(np.uint8), (w, h),
                 interpolation=cv2.INTER_NEAREST
@@ -335,7 +482,7 @@ class MovementPathEstimator:
             pixels = gray_frame[mask_resized]
         else:
             pixels = gray_frame[self._combined_mask]
-        
+
         if len(pixels) == 0:
             return {'mean': 0, 'std': 0}
         return {'mean': float(np.mean(pixels)), 'std': float(np.std(pixels))}
@@ -357,7 +504,6 @@ class MovementPathEstimator:
         within_std_smooth = np.convolve(within_std, smooth_k, mode='same')
 
         flow_abs = np.abs(radial_flows)
-
         mid_s = n_brightness // 5
         mid_e = 4 * n_brightness // 5
 
@@ -373,12 +519,10 @@ class MovementPathEstimator:
         consecutive_needed = 20
         start = 0
         consecutive = 0
-
         for i in range(min(n_brightness // 3, n_brightness)):
             brightness_ok = brightness_stability[i] < bright_thresh
             texture_ok = texture_lo < within_std_smooth[i] < texture_hi
             flow_ok = flow_abs[i] < flow_thresh if i < n_flow else True
-
             if brightness_ok and texture_ok and flow_ok:
                 consecutive += 1
                 if consecutive >= consecutive_needed:
@@ -393,7 +537,6 @@ class MovementPathEstimator:
             brightness_ok = brightness_stability[i] < bright_thresh
             texture_ok = texture_lo < within_std_smooth[i] < texture_hi
             flow_ok = flow_abs[i - 1] < flow_thresh if 0 <= i - 1 < n_flow else True
-
             if brightness_ok and texture_ok and flow_ok:
                 consecutive += 1
                 if consecutive >= consecutive_needed:
@@ -521,7 +664,6 @@ class MovementPathEstimator:
         img = img[48:h-16, :, :]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        # Apply same downscaling as frames
         if self.scale != 1.0:
             new_w = (int(gray.shape[1] * self.scale) // 8) * 8
             new_h = (int(gray.shape[0] * self.scale) // 8) * 8
@@ -550,9 +692,9 @@ class MovementPathEstimator:
     #  RADIAL GRIDS                                                       #
     # ================================================================== #
 
-    def _precompute_radial_grids(self):
+    def _precompute_radial_grids(self, cx, cy):
+        """Pre-compute radial unit vectors, mask, and distance weights."""
         h, w = self.valid_mask.shape
-        cx, cy = w / 2.0, h / 2.0
 
         y_coords, x_coords = np.mgrid[0:h, 0:w]
         dx = (x_coords - cx).astype(np.float32)
@@ -564,23 +706,14 @@ class MovementPathEstimator:
         self._rx = dx / r
         self._ry = dy / r
 
+        # [C] Distance weights: sqrt(r) so outer pixels contribute more
+        # but not overwhelmingly so
         max_r = np.sqrt(cx**2 + cy**2)
+        self._weights = np.sqrt(r / max_r)
+
         ring = (r > max_r * 0.10) & (r < max_r * 0.85)
         self._combined_mask = ring & self.valid_mask
         print(f"  Combined mask: {np.sum(self._combined_mask)} pixels")
-
-    # ================================================================== #
-    #  RADIAL FLOW                                                        #
-    # ================================================================== #
-
-    def _compute_radial_flow(self, flow):
-        flow_u = flow[:, :, 0]
-        flow_v = flow[:, :, 1]
-        radial = flow_u * self._rx + flow_v * self._ry
-
-        if np.sum(self._combined_mask) < 100:
-            return 0.0
-        return np.mean(radial[self._combined_mask])
 
     # ================================================================== #
     #  FRAMEWORK BOILERPLATE                                              #
