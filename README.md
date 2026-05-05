@@ -2,6 +2,8 @@
 
 We (**Carlong Geis, Frederik Kepler, Julius Schneider**) developed RFST during the Helbling x PhysicalAI Hackathon
 
+![Alt Text](mySolution/results/presentation.gif)
+
 The "Bomb" travels into the channel, and is pulled back at a certain point, and returns. The solution is evaluated based on the **Mean Absolute Error (MAE)** of the estimated position and the **Frame Error** of the Turning Point (TP). i.e. How many frames off from the real TP the estimated TP was.
 
 **Current Performance:**
